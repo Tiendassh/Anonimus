@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Shield, EyeOff, Server, Disc, ChevronRight, CheckCircle2, ShieldAlert, Cpu } from "lucide-react";
 
-export default function ShieldTab() {
+interface ShieldTabProps {
+  currentUserId: string;
+  currentUserProgress?: { xp: number; level: number; achievements: string[] };
+  onTriggerAction?: (actionId: string) => void;
+}
+
+export default function ShieldTab({ currentUserId, currentUserProgress, onTriggerAction }: ShieldTabProps) {
   const [shieldActive, setShieldActive] = useState(true);
   const [dohActive, setDohActive] = useState(true);
   const [httpMasking, setHttpMasking] = useState(true);
@@ -37,6 +43,7 @@ export default function ShieldTab() {
         ? "🛡️ MÓDULO PRINCIPAL SHIELD: Activado. Hosting oculto mediante máscara distribuida."
         : "⚠️ ADVERTENCIA: Shield principal desactivado. Tu IP de origen es parcialmente visible en metadatos del cliente."
     );
+    if (onTriggerAction) onTriggerAction("rotate_shield");
   };
 
   const handleToggleDoh = () => {
@@ -47,6 +54,7 @@ export default function ShieldTab() {
         ? "🔒 DoH: Activado. Redirigiendo peticiones DNS de chat a puertos cifrados 443."
         : "⚠️ DoH: Desactivado. Operadores locales podrían registrar peticiones de resolución web."
     );
+    if (onTriggerAction) onTriggerAction("toggle_doh");
   };
 
   const handleToggleHttpMasking = () => {
@@ -57,6 +65,7 @@ export default function ShieldTab() {
         ? "🎭 Masking HTTP: Cabeceras de agente alteradas. Evitando huella digital móvil."
         : "⚠️ Masking HTTP: Desactivado. Navegador revelando identificador nativo."
     );
+    if (onTriggerAction) onTriggerAction("toggle_masking");
   };
 
   const handleToggleProxyCascade = () => {
@@ -67,6 +76,7 @@ export default function ShieldTab() {
         ? "🔄 Cascade Proxy: Triplicando saltos de re-enrutamiento. Latencia modificada."
         : "⚠️ Cascade Proxy: Conexión directa activada. Latencia optimizada pero seguridad reducida."
     );
+    if (onTriggerAction) onTriggerAction("toggle_cascade");
   };
 
   const rotateNode = () => {
@@ -82,6 +92,7 @@ export default function ShieldTab() {
     setSelectedMainNode(nextNode);
     addLog(`🔄 Rotando nodo de tunel de salida hacia: [${nextNode}]`);
     setPing(Math.floor(Math.random() * 60) + 40);
+    if (onTriggerAction) onTriggerAction("rotate_shield");
   };
 
   return (
@@ -246,7 +257,7 @@ export default function ShieldTab() {
 
       {/* Real-Time Security Log Console */}
       <h3 className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider mb-2">Logs del Canal Cifrado</h3>
-      <div className="flex-1 bg-neutral-950 p-3 rounded-lg border border-neutral-900 max-h-[140px] overflow-y-auto font-mono text-[9px] text-zinc-400 leading-relaxed scrollbar-thin">
+      <div className="bg-neutral-950 p-3 rounded-lg border border-neutral-900 max-h-[110px] overflow-y-auto font-mono text-[9px] text-zinc-400 leading-relaxed scrollbar-thin">
         {logs.map((log, index) => (
           <div key={index} className="border-b border-neutral-900/40 py-1 font-mono tracking-wide">
             <span className="text-emerald-600 font-semibold">[{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}]</span>{" "}
@@ -254,6 +265,17 @@ export default function ShieldTab() {
           </div>
         ))}
       </div>
+
+      {/* Advanced Level-4 diagnostics details */}
+      {currentUserProgress?.level && currentUserProgress.level >= 4 ? (
+        <div className="mt-3 bg-emerald-950/20 text-emerald-400 p-2.5 rounded border border-emerald-500/30 text-[9px] font-mono leading-normal">
+          ⚡ MODO ESPECTRO DE RED (NIVEL 4): Acceso completo a metadatos de enrutamiento habilitado. Nodos intermedios estables. Servidor virtualizado a salvo.
+        </div>
+      ) : (
+        <div className="mt-3 bg-neutral-900/60 text-zinc-500 p-2.5 rounded text-[9px] font-mono leading-normal text-center border border-neutral-800">
+          🔒 Consola de diagnóstico avanzada bloqueada. Alcanza el Nivel 4 (Espectro de Red) para descifrar telemetría interna del host.
+        </div>
+      )}
     </div>
   );
 }

@@ -19,7 +19,7 @@ if (apiKey) {
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
@@ -78,6 +78,7 @@ interface AppState {
   posts: ForumPost[];
   rooms: MatchRoom[];
   lobby: { id: string; name: string; avatar: string; interests: string[] }[];
+  userProgress?: Record<string, { xp: number; level: number; achievements: string[] }>;
 }
 
 const STATE_FILE = path.join(process.cwd(), "src", "db_simulated.json");
@@ -99,9 +100,9 @@ const defaultState: AppState = {
       likes: 12,
       timestamp: "Hace 2 horas",
       comments: [
-        { id: "c1", author: "Zorro Veloz", content: "El problema es la latencia de la red Onion. Para chats rápidos a veces se cuelga.", timestamp: "Hace 1 hora" },
-        { id: "c2", author: "Ciber Gato", content: "Excelente aporte. Recomiendo usar DNS de Quad9 para mayor seguridad.", timestamp: "Hace 40 mins" }
-      ]
+  { id: "c1", author: "Zorro Veloz", content: "El problema es la latencia de la red Onion. Para chats rápidos a veces se cuelga.", timestamp: "Hace 1 hora" },
+  { id: "c2", author: "Ciber Gato", content: "Excelente aporte. Recomiendo usar DNS de Quad9 para mayor seguridad.", timestamp: "Hace 40 mins" }
+]
     },
     {
       id: "post2",
@@ -112,12 +113,13 @@ const defaultState: AppState = {
       likes: 8,
       timestamp: "Hace 5 horas",
       comments: [
-        { id: "c3", author: "Búho Sabio", content: "Totalmente de acuerdo, el test de Turing mide imitación, no comprensión.", timestamp: "Hace 3 horas" }
-      ]
+  { id: "c3", author: "Búho Sabio", content: "Totalmente de acuerdo, el test de Turing mide imitación, no comprensión.", timestamp: "Hace 3 horas" }
+]
     }
   ],
   rooms: [],
-  lobby: []
+  lobby: [],
+  userProgress: {}
 };
 
 // Ensure directories exist
@@ -130,7 +132,11 @@ function loadState(): AppState {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const data = fs.readFileSync(STATE_FILE, "utf-8");
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (!parsed.userProgress) {
+        parsed.userProgress = {};
+      }
+      return parsed;
     }
   } catch (e) {
     console.error("Error loading simulated state, using defaults:", e);
@@ -250,6 +256,70 @@ function updateClosenessUnlocks(room: MatchRoom) {
 }
 
 // ----------------------------------------
+// LEVEL & EXPERIENCE PROGRESSION SYSTEM
+// ----------------------------------------
+function addXp(
+  state: AppState, 
+  userId: string, 
+  points: number, 
+  achievementId?: string
+): { xp: number; level: number; leveledUp: boolean; unlockedAchievement?: string } {
+  if (!state.userProgress) {
+    state.userProgress = {};
+  }
+  if (!state.userProgress[userId]) {
+    state.userProgress[userId] = {
+      xp: 0,
+      level: 1,
+      achievements: ["welcome"]
+    };
+  }
+
+  const user = state.userProgress[userId];
+  const oldLevel = user.level;
+  user.xp += points;
+
+  // Level thresholds: 
+  // Level 1: 0 - 100 XP
+  // Level 2: 100 - 300 XP
+  // Level 3: 300 - 600 XP
+  // Level 4: 600+ XP
+  let calculatedLevel = 1;
+  if (user.xp >= 600) {
+    calculatedLevel = 4;
+  } else if (user.xp >= 300) {
+    calculatedLevel = 3;
+  } else if (user.xp >= 100) {
+    calculatedLevel = 2;
+  }
+
+  let leveledUp = false;
+  if (calculatedLevel > oldLevel) {
+    user.level = calculatedLevel;
+    leveledUp = true;
+    
+    // Automatically grant level achievement milestone
+    const milestoneAchievement = `level_${calculatedLevel}`;
+    if (!user.achievements.includes(milestoneAchievement)) {
+      user.achievements.push(milestoneAchievement);
+    }
+  }
+
+  let unlockedAchievement: string | undefined = undefined;
+  if (achievementId && !user.achievements.includes(achievementId)) {
+    user.achievements.push(achievementId);
+    unlockedAchievement = achievementId;
+  }
+
+  return {
+    xp: user.xp,
+    level: user.level,
+    leveledUp,
+    unlockedAchievement
+  };
+}
+
+// ----------------------------------------
 // API ENDPOINTS
 // ----------------------------------------
 
@@ -259,10 +329,93 @@ app.get("/api/state", (req, res) => {
   res.json(state);
 });
 
+// Fetch specific user's progress or create default
+app.get("/api/user/progress", (req, res) => {
+  const userId = req.query.userId as string;
+  if (!userId) {
+    return res.status(400).json({ error: "userId query parameter must be provided" });
+  }
+
+  const state = loadState();
+  if (!state.userProgress) {
+    state.userProgress = {};
+  }
+  if (!state.userProgress[userId]) {
+    state.userProgress[userId] = {
+      xp: 0,
+      level: 1,
+      achievements: ["welcome"]
+    };
+    saveState(state);
+  }
+
+  res.json({ success: true, progress: state.userProgress[userId] });
+});
+
+// Award XP for client-side actions
+app.post("/api/user/action", (req, res) => {
+  const { userId, actionId } = req.body;
+  if (!userId || !actionId) {
+    return res.status(400).json({ error: "Faltan parámetros" });
+  }
+
+  const state = loadState();
+  let points = 0;
+  let achievementId: string | undefined = undefined;
+
+  switch (actionId) {
+    case "rotate_shield":
+      points = 10;
+      achievementId = "shield_master";
+      break;
+    case "toggle_doh":
+    case "toggle_masking":
+    case "toggle_cascade":
+      points = 5;
+      break;
+    case "welcome_sync":
+      points = 10;
+      achievementId = "welcome";
+      break;
+    default:
+      points = 0;
+  }
+
+  let result: { xp: number; level: number; leveledUp: boolean; unlockedAchievement?: string } = { xp: 0, level: 1, leveledUp: false, unlockedAchievement: undefined };
+  if (points > 0) {
+    result = addXp(state, userId, points, achievementId);
+    saveState(state);
+  } else {
+    if (state.userProgress && state.userProgress[userId]) {
+      result.xp = state.userProgress[userId].xp;
+      result.level = state.userProgress[userId].level;
+    }
+  }
+
+  res.json({
+    success: true,
+    progress: state.userProgress?.[userId] || { xp: 0, level: 1, achievements: ["welcome"] },
+    ...result
+  });
+});
+
 // Edit & Add/Delete Topics
 app.post("/api/topics", (req, res) => {
-  const { action, id, name, description, category } = req.body;
+  const { action, id, name, description, category, userId } = req.body;
   const state = loadState();
+
+  // Enforce level lock (Level 4 needed to manage topics)
+  if (userId) {
+    if (!state.userProgress) {
+      state.userProgress = {};
+    }
+    const currentLvl = state.userProgress[userId]?.level || 1;
+    if (currentLvl < 4) {
+      return res.status(403).json({ 
+        error: "🔒 Acceso Restringido. Crear, modificar o eliminar categorías requiere ser Nivel 4: Espectro de Red." 
+      });
+    }
+  }
 
   if (action === "create") {
     const newTopic: Topic = {
@@ -273,8 +426,14 @@ app.post("/api/topics", (req, res) => {
       isCustom: true
     };
     state.topics.push(newTopic);
+    
+    let xpStatus = null;
+    if (userId) {
+      xpStatus = addXp(state, userId, 40);
+    }
+    
     saveState(state);
-    return res.json({ success: true, topic: newTopic, state });
+    return res.json({ success: true, topic: newTopic, state, xpStatus });
   }
 
   if (action === "edit") {
@@ -304,12 +463,26 @@ app.post("/api/topics", (req, res) => {
 
 // Forum posts endpoints
 app.post("/api/forum/posts", (req, res) => {
-  const { topicId, title, content, author } = req.body;
+  const { topicId, title, content, author, userId } = req.body;
   if (!topicId || !title || !content) {
     return res.status(400).json({ error: "Faltan campos requeridos" });
   }
 
   const state = loadState();
+
+  // Enforce level lock (Level 3 needed to create posts)
+  if (userId) {
+    if (!state.userProgress) {
+      state.userProgress = {};
+    }
+    const currentLvl = state.userProgress[userId]?.level || 1;
+    if (currentLvl < 3) {
+      return res.status(403).json({ 
+        error: "🔒 Acceso Restringido. Crear nuevas transmisiones (posts) requiere ser Nivel 3: Sombra Digital." 
+      });
+    }
+  }
+
   const newPost: ForumPost = {
     id: "post_" + Math.random().toString(36).substring(2, 9),
     topicId,
@@ -322,14 +495,20 @@ app.post("/api/forum/posts", (req, res) => {
   };
 
   state.posts.push(newPost);
+  
+  let xpStatus = null;
+  if (userId) {
+    xpStatus = addXp(state, userId, 25, "first_post");
+  }
+
   saveState(state);
-  res.json({ success: true, post: newPost, state });
+  res.json({ success: true, post: newPost, state, xpStatus });
 });
 
 // Post action: like or add comment
 app.post("/api/forum/posts/:id/action", (req, res) => {
   const { id } = req.params;
-  const { action, author, commentContent } = req.body;
+  const { action, author, commentContent, userId } = req.body;
   const state = loadState();
 
   const postIndex = state.posts.findIndex(p => p.id === id);
@@ -339,8 +518,26 @@ app.post("/api/forum/posts/:id/action", (req, res) => {
 
   const post = state.posts[postIndex];
 
+  // Enforce Level 2 lock for writing comments
+  if (action === "comment" && userId) {
+    if (!state.userProgress) {
+      state.userProgress = {};
+    }
+    const currentLvl = state.userProgress[userId]?.level || 1;
+    if (currentLvl < 2) {
+      return res.status(403).json({ 
+        error: "🔒 Acceso Restringido. Añadir comentarios a las transmisiones requiere ser Nivel 2: Criptógrafo." 
+      });
+    }
+  }
+
+  let xpStatus = null;
+
   if (action === "like") {
     post.likes += 1;
+    if (userId) {
+      xpStatus = addXp(state, userId, 5);
+    }
   } else if (action === "comment") {
     if (!commentContent) return res.status(400).json({ error: "Comentario vacío" });
     const newComment: Comment = {
@@ -350,11 +547,14 @@ app.post("/api/forum/posts/:id/action", (req, res) => {
       timestamp: "Hace un momento"
     };
     post.comments.push(newComment);
+    if (userId) {
+      xpStatus = addXp(state, userId, 15, "first_comment");
+    }
   }
 
   state.posts[postIndex] = post;
   saveState(state);
-  res.json({ success: true, post, state });
+  res.json({ success: true, post, state, xpStatus });
 });
 
 // Join Matchmaker Hub
@@ -373,7 +573,12 @@ app.post("/api/match/join", (req, res) => {
   );
 
   if (existingRoom) {
-    return res.json({ success: true, room: existingRoom, state });
+    let xpStatus = null;
+    if (userId) {
+      xpStatus = addXp(state, userId, 5);
+      saveState(state);
+    }
+    return res.json({ success: true, room: existingRoom, state, xpStatus });
   }
 
   // Look in current online lobby for compatible interests
@@ -411,8 +616,14 @@ app.post("/api/match/join", (req, res) => {
     };
 
     state.rooms.push(newRoom);
+    
+    let xpStatus = null;
+    if (userId) {
+      xpStatus = addXp(state, userId, 25, "first_match");
+    }
+    
     saveState(state);
-    return res.json({ success: true, room: newRoom, state });
+    return res.json({ success: true, room: newRoom, state, xpStatus });
   }
 
   // If no one is matching in real-time, generate a simulated matching user in 1.5 seconds so they can test instantly!
@@ -459,8 +670,14 @@ app.post("/api/match/join", (req, res) => {
   };
 
   state.rooms.push(newRoomSimulated);
+  
+  let xpStatus = null;
+  if (userId) {
+    xpStatus = addXp(state, userId, 25, "first_match");
+  }
+  
   saveState(state);
-  return res.json({ success: true, room: newRoomSimulated, state });
+  return res.json({ success: true, room: newRoomSimulated, state, xpStatus });
 });
 
 // Exit or close match room
@@ -476,7 +693,7 @@ app.post("/api/match/leave", (req, res) => {
 
 // Send Chat Message and dynamically increase intimacy score
 app.post("/api/chat/send", (req, res) => {
-  const { roomId, sender, content } = req.body;
+  const { roomId, sender, content, userId } = req.body;
   if (!roomId || !sender || !content) {
     return res.status(400).json({ error: "Faltan datos del mensaje" });
   }
@@ -503,6 +720,18 @@ app.post("/api/chat/send", (req, res) => {
   room.closenessPoints = Math.min(100, room.closenessPoints + 6);
   updateClosenessUnlocks(room);
 
+  // Award +5 XP for sending chat message
+  let xpStatus = null;
+  if (userId) {
+    xpStatus = addXp(state, userId, 5, "first_chat");
+  }
+
+  // If closeness reaches high points, award a massive points boost & milestone badge
+  if (room.closenessPoints >= 100) {
+    if (room.user1.id) addXp(state, room.user1.id, 50, "closeness_max");
+    if (room.user2.id && !room.user2.isSimulated) addXp(state, room.user2.id, 50, "closeness_max");
+  }
+
   state.rooms[roomIndex] = room;
   saveState(state);
 
@@ -511,7 +740,7 @@ app.post("/api/chat/send", (req, res) => {
     triggerSimulatedResponse(room.id, room.interests[0] || "default");
   }
 
-  res.json({ success: true, room, state });
+  res.json({ success: true, room, state, xpStatus });
 });
 
 // Handle level/layer increase, votes or icebreaker requests
@@ -525,6 +754,21 @@ app.post("/api/chat/action", (req, res) => {
 
   const room = state.rooms[roomIndex];
 
+  // Enforce Level 3 lock for proximity accelerator votes
+  if (action === "vote" && userId) {
+    if (!state.userProgress) {
+      state.userProgress = {};
+    }
+    const currentLvl = state.userProgress[userId]?.level || 1;
+    if (currentLvl < 3) {
+      return res.status(403).json({ 
+        error: "🔒 Acceso Restringido. Utilizar el acelerador de proximidad requiere ser Nivel 3 (Sombra Digital)." 
+      });
+    }
+  }
+
+  let xpStatus = null;
+
   if (action === "vote") {
     // Vote to immediately boost closeness (bypassing text volume)
     if (room.user1.id === userId) room.user1.readyForNextLevel = true;
@@ -533,6 +777,10 @@ app.post("/api/chat/action", (req, res) => {
     // Simulate opponent accepting vote quickly if opponent is simulated
     if (room.user2.isSimulated) {
       room.user2.readyForNextLevel = true;
+    }
+
+    if (userId) {
+      xpStatus = addXp(state, userId, 15, "voter");
     }
 
     if (room.user1.readyForNextLevel && room.user2.readyForNextLevel) {
@@ -549,6 +797,10 @@ app.post("/api/chat/action", (req, res) => {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
       updateClosenessUnlocks(room);
+      
+      // Award extra points to both parties
+      if (room.user1.id) addXp(state, room.user1.id, 20);
+      if (room.user2.id && !room.user2.isSimulated) addXp(state, room.user2.id, 20);
     } else {
       room.messages.push({
         id: "sys_vote_req_" + Math.random().toString(36).substring(2, 9),
@@ -560,16 +812,37 @@ app.post("/api/chat/action", (req, res) => {
     }
   }
 
+  // Award closeness_max if level upgraded
+  if (room.closenessPoints >= 100) {
+    if (room.user1.id) addXp(state, room.user1.id, 50, "closeness_max");
+    if (room.user2.id && !room.user2.isSimulated) addXp(state, room.user2.id, 50, "closeness_max");
+  }
+
   state.rooms[roomIndex] = room;
   saveState(state);
-  res.json({ success: true, room, state });
+  res.json({ success: true, room, state, xpStatus });
 });
 
 // Call server-side Gemini wrapper to generate icebreaker prompt based on common interests
 app.post("/api/ai/icebreaker", async (req, res) => {
-  const { roomId, interests } = req.body;
+  const { roomId, interests, userId } = req.body;
   if (!roomId || !interests) {
     return res.status(400).json({ error: "Datos incompletos" });
+  }
+
+  const state = loadState();
+
+  // Enforce Level 2 lock for Gemini AI requests
+  if (userId) {
+    if (!state.userProgress) {
+      state.userProgress = {};
+    }
+    const currentLvl = state.userProgress[userId]?.level || 1;
+    if (currentLvl < 2) {
+      return res.status(403).json({ 
+        error: "🔒 Acceso Restringido. Pedir ayuda del mediador IA Gemini requiere ser Nivel 2 (Criptógrafo)." 
+      });
+    }
   }
 
   let prompt = `Eres un mediador anónimo y seguro en una red de anonimato y chat llamada 'AnonSphere'.
@@ -589,7 +862,6 @@ Debe ser en español, breve (máximo 140 caracteres), un tono cyberpunk, rebelde
       }
     }
 
-    const state = loadState();
     const roomIndex = state.rooms.findIndex(r => r.id === roomId);
     if (roomIndex !== -1) {
       state.rooms[roomIndex].messages.push({
@@ -599,11 +871,18 @@ Debe ser en español, breve (máximo 140 caracteres), un tono cyberpunk, rebelde
         type: "icebreaker",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
+      
       // Give points boost for requesting AI assistant!
       state.rooms[roomIndex].closenessPoints = Math.min(100, state.rooms[roomIndex].closenessPoints + 15);
       updateClosenessUnlocks(state.rooms[roomIndex]);
+
+      let xpStatus = null;
+      if (userId) {
+        xpStatus = addXp(state, userId, 15, "ai_breaker");
+      }
+
       saveState(state);
-      return res.json({ success: true, room: state.rooms[roomIndex], state });
+      return res.json({ success: true, room: state.rooms[roomIndex], state, xpStatus });
     }
 
     res.json({ success: true, generatedText: responseText });

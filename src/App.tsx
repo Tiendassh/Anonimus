@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { AppState, MatchRoom, Topic, ForumPost, AppTab } from "./types";
 import DeviceWrapper from "./components/DeviceWrapper";
 import MatchTab from "./components/MatchTab";
 import ForumTab from "./components/ForumTab";
 import ShieldTab from "./components/ShieldTab";
+import { LEVELS, ACHIEVEMENTS } from "./utils/progression";
 import { 
   ShieldCheck, 
   Settings, 
@@ -14,7 +15,12 @@ import {
   Shield, 
   Edit3, 
   Trash2,
-  Plus
+  Plus,
+  Award,
+  Sparkles,
+  Zap,
+  Lock,
+  Compass
 } from "lucide-react";
 
 export default function App() {
@@ -36,6 +42,12 @@ export default function App() {
 
   // Tracks the current active chat room
   const [activeRoom, setActiveRoom] = useState<MatchRoom | null>(null);
+
+  // Level Up and Achievements State HUD
+  const [levelUpToast, setLevelUpToast] = useState<{ level: number; name: string; badge: string; unlocks: string[] } | null>(null);
+  const [achievementToast, setAchievementToast] = useState<{ id: string; name: string; desc: string; icon: string } | null>(null);
+  const [isProgressModalOpen, setIsProgressModalOpen] = useState<boolean>(false);
+  const lastKnownLevelRef = useRef<number>(1);
 
   // Load and refresh state from backend
   const refreshState = async () => {
@@ -63,15 +75,95 @@ export default function App() {
     }
   };
 
+  // Dedicated progress variables
+  const currentUserProgress = appState.userProgress?.[currentUserId] || { xp: 0, level: 1, achievements: ["welcome"] };
+  const currentLevelConfig = LEVELS.find(l => l.level === currentUserProgress.level) || LEVELS[0];
+  const nextLevelConfig = LEVELS.find(l => l.level === currentUserProgress.level + 1);
+
+  // Compute XP Percent
+  let xpPercent = 100;
+  if (nextLevelConfig) {
+    const minXpForCurrent = currentLevelConfig.minXp;
+    const maxXpForCurrent = nextLevelConfig.minXp;
+    const xpRange = maxXpForCurrent - minXpForCurrent;
+    const currentXpInLevel = currentUserProgress.xp - minXpForCurrent;
+    xpPercent = Math.min(100, Math.max(0, (currentXpInLevel / xpRange) * 100));
+  }
+
+  // Detect Level Up client-side for immediate nice toasts
+  useEffect(() => {
+    if (currentUserProgress && currentUserProgress.level > lastKnownLevelRef.current) {
+      const matchedLevel = LEVELS.find(l => l.level === currentUserProgress.level);
+      if (matchedLevel) {
+        setLevelUpToast(matchedLevel);
+      }
+      lastKnownLevelRef.current = currentUserProgress.level;
+    }
+  }, [currentUserProgress?.level]);
+
+  // Synchronous onboarding progress initialization
+  useEffect(() => {
+    const initUserProgress = async () => {
+      try {
+        setLoading(true);
+        // Load / Init profile
+        const response = await fetch(`/api/user/progress?userId=${currentUserId}`);
+        if (response.ok) {
+          // Trigger welcome syncing
+          await fetch("/api/user/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: currentUserId, actionId: "welcome_sync" })
+          });
+        }
+        await refreshState();
+      } catch (err) {
+        console.error("Failed to init progress", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    initUserProgress();
+  }, [currentUserId]);
+
   useEffect(() => {
     refreshState();
-    // Poll state every 4 seconds to simulate other client interactions in backend
+    // Poll state every 4.5 seconds to simulate other client interactions in backend
     const interval = setInterval(() => {
       refreshState();
-    }, 4500);
+    }, 4505);
 
     return () => clearInterval(interval);
   }, [activeRoom?.id]);
+
+  // Client-triggered actions helper
+  const triggerUserAction = async (actionId: string) => {
+    try {
+      const response = await fetch("/api/user/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUserId, actionId })
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.leveledUp) {
+          const matchedLevel = LEVELS.find(l => l.level === result.level);
+          if (matchedLevel) {
+            setLevelUpToast(matchedLevel);
+          }
+        }
+        if (result.unlockedAchievement) {
+          const ach = ACHIEVEMENTS.find(a => a.id === result.unlockedAchievement);
+          if (ach) {
+            setAchievementToast({ id: ach.id, name: ach.name, desc: ach.desc, icon: ach.icon });
+          }
+        }
+        await refreshState();
+      }
+    } catch (e) {
+      console.error("Error triggering user action", e);
+    }
+  };
 
   const handleSetUserProfile = (name: string, avatar: string, tastes: string[]) => {
     setUserName(name);
@@ -208,6 +300,51 @@ export default function App() {
           </button>
         </nav>
 
+        {/* Real-time Cyberpunk Leveling & XP HUD Row */}
+        <div className="bg-zinc-90 w-full bg-zinc-900/60 border-b border-zinc-800 px-5 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0 selection:bg-emerald-400 selection:text-black">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl shrink-0 select-none animate-pulse" role="img" aria-label="avatar">{userAvatar}</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-black text-white uppercase tracking-tight">{userName}</span>
+                <span className="px-1.5 py-0.5 rounded bg-emerald-400/15 border border-emerald-500/30 text-emerald-400 font-mono text-[8px] font-black tracking-wide">
+                  RANGO: {currentLevelConfig.badge} LVL {currentUserProgress.level}
+                </span>
+              </div>
+              <p className="text-[10px] font-mono text-zinc-400 mt-0.5 uppercase tracking-wide">
+                IDENTIFICACIÓN: <span className="font-bold text-white font-mono">{currentLevelConfig.name}</span>
+              </p>
+            </div>
+          </div>
+
+          {/* XP Progress Bar */}
+          <div className="flex-1 md:max-w-xs flex flex-col gap-1">
+            <div className="flex justify-between text-[9px] font-mono text-zinc-500 font-bold uppercase">
+              <span>PROGRESO LOCAL: {currentUserProgress.xp} XP</span>
+              <span>{nextLevelConfig ? `${nextLevelConfig.minXp} XP` : "MAX"}</span>
+            </div>
+            
+            {/* ProgressBar */}
+            <div className="w-full h-1.5 bg-zinc-950 border border-zinc-900 rounded-sm overflow-hidden relative">
+              <div 
+                className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 shadow-[0_0_10px_#10b981] transition-all duration-700"
+                style={{ width: `${xpPercent}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsProgressModalOpen(true)}
+              className="px-3 py-1.5 bg-zinc-905 hover:bg-zinc-800 text-[10px] font-mono font-black border border-zinc-800 rounded uppercase tracking-wider transition active:scale-95 text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer bg-zinc-900/60"
+              id="btn-open-progression-panel"
+            >
+              <Award className="w-3.5 h-3.5 text-yellow-400 animate-spin-slow" />
+              <span>LOGROS Y RANGOS [{currentUserProgress.achievements?.length || 0}]</span>
+            </button>
+          </div>
+        </div>
+
         {/* Content Panel Area */}
         <div className="flex-1 flex flex-col overflow-hidden relative">
           {loading ? (
@@ -230,6 +367,7 @@ export default function App() {
                   onSetUserProfile={handleSetUserProfile}
                   onSetActiveRoom={setActiveRoom}
                   onRefreshState={refreshState}
+                  currentUserProgress={currentUserProgress}
                 />
               )}
 
@@ -240,6 +378,7 @@ export default function App() {
                   currentUserId={currentUserId}
                   userName={userName}
                   onRefreshState={refreshState}
+                  currentUserProgress={currentUserProgress}
                 />
               )}
 
@@ -253,11 +392,21 @@ export default function App() {
                     </div>
                     {!isCreatingTopic && (
                       <button
-                        onClick={() => setIsCreatingTopic(true)}
-                        className="bg-white text-black text-xs font-black px-4 py-2 hover:bg-emerald-400 transition uppercase tracking-tight flex items-center gap-1"
+                        onClick={() => {
+                          if (currentUserProgress.level < 4) {
+                            alert("🔒 Acceso Restringido. Crear nuevos canales de debate globales requiere ser Nivel 4 O Superior: Espectro de Red.");
+                          } else {
+                            setIsCreatingTopic(true);
+                          }
+                        }}
+                        className={`text-xs font-black px-4 py-2 hover:bg-emerald-400 transition uppercase tracking-tight flex items-center gap-1 active:scale-95 ${
+                          currentUserProgress.level < 4
+                            ? "bg-zinc-900 border border-zinc-800 text-zinc-500 cursor-not-allowed"
+                            : "bg-white text-black cursor-pointer"
+                        }`}
                         id="btn-add-topic-tab"
                       >
-                        <Plus className="w-4 h-4" /> Nuevo Tema
+                        {currentUserProgress.level < 4 ? "🔒 Bloqueado (Lvl 4)" : <><Plus className="w-4 h-4" /> Nuevo Tema</>}
                       </button>
                     )}
                   </div>
@@ -419,9 +568,159 @@ export default function App() {
               )}
 
               {tab === "shield" && (
-                <ShieldTab />
+                <ShieldTab
+                  currentUserId={currentUserId}
+                  currentUserProgress={currentUserProgress}
+                  onTriggerAction={triggerUserAction}
+                />
               )}
             </>
+          )}
+
+          {/* Floating Custom Cyberpunk Toast Level Up Overlay */}
+          {levelUpToast && (
+            <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+              <div className="bg-zinc-950 border-4 border-emerald-500 text-white p-6 max-w-sm w-full rounded-xl shadow-[0_0_50px_rgba(16,185,129,0.3)] font-sans flex flex-col items-center text-center animate-bounce-short">
+                <span className="text-6xl mb-3 animate-pulse">{levelUpToast.badge}</span>
+                <h3 className="text-[10px] font-mono text-emerald-400 font-extrabold tracking-widest uppercase mb-1">¡RANGO SUBIDO DE NIVEL!</h3>
+                <h4 className="text-2xl font-black text-white uppercase tracking-tight mb-2">{levelUpToast.name}</h4>
+                <p className="text-xs text-zinc-400 mb-4 font-mono">HAS LOGRADO ALCANZAR EL RANGO {levelUpToast.level}</p>
+                
+                <div className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded mb-4 text-left text-xs font-mono">
+                  <p className="text-emerald-400 font-bold mb-1 uppercase tracking-wider text-[10px]">🔓 Capacidad Desbloqueada:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-zinc-300">
+                    {levelUpToast.unlocks.map((un, id) => (
+                      <li key={id}>{un}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <button
+                  onClick={() => setLevelUpToast(null)}
+                  className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider transition rounded"
+                >
+                  [ CONFIGURAR METADATOS ]
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Floating Achievement Unlocked Overlay */}
+          {achievementToast && (
+            <div className="fixed bottom-16 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-xs bg-zinc-950 border-2 border-white p-4 text-white rounded-lg shadow-2xl z-50 font-sans flex items-start gap-3 animate-slide-in">
+              <span className="text-3xl shrink-0">{achievementToast.icon}</span>
+              <div className="flex-1">
+                <h4 className="text-[10px] font-mono text-yellow-400 font-extrabold uppercase tracking-widest">🏆 LOGRO DESBLOQUEADO</h4>
+                <h5 className="text-xs font-bold text-white uppercase tracking-tight mt-0.5">{achievementToast.name}</h5>
+                <p className="text-[10px] text-zinc-400 font-mono mt-1">{achievementToast.desc}</p>
+              </div>
+              <button 
+                onClick={() => setAchievementToast(null)}
+                className="text-zinc-500 hover:text-white font-mono text-xs font-bold shrink-0 uppercase"
+              >
+                [X]
+              </button>
+            </div>
+          )}
+
+          {/* Progression Drawer Modal Panel */}
+          {isProgressModalOpen && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+              <div className="bg-zinc-950 border-4 border-zinc-850 text-white p-6 max-w-md w-full h-[85vh] flex flex-col justify-between rounded-xl shadow-2xl font-sans relative">
+                <button 
+                  onClick={() => setIsProgressModalOpen(false)}
+                  className="absolute top-4 right-4 text-zinc-400 hover:text-white font-mono text-xs font-bold uppercase py-1 px-2 border border-zinc-800 rounded hover:border-white transition"
+                >
+                  Cerrar [X]
+                </button>
+
+                <div className="overflow-y-auto pr-1 flex-1 space-y-5 scrollbar-thin my-5">
+                  <div className="border-b border-zinc-805 pb-3">
+                    <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest block">REGISTROS LOG SYSTEM</span>
+                    <h3 className="text-xl font-black text-white italic tracking-tight uppercase">Progreso y Rangos de Red</h3>
+                    <p className="text-xs text-zinc-400 font-mono">Consigue experiencia (XP) publicando, chateando y configurando routers de seguridad.</p>
+                  </div>
+
+                  {/* Levels walkthrough */}
+                  <div className="space-y-3">
+                    <h4 className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider font-extrabold mb-1">RANGOS DISPONIBLES</h4>
+                    {LEVELS.map((lvl) => {
+                      const isCompleted = currentUserProgress.level >= lvl.level;
+                      const isCurrent = currentUserProgress.level === lvl.level;
+                      return (
+                        <div 
+                          key={lvl.level}
+                          className={`p-3 border-2 rounded-lg flex items-start gap-3 transition-colors ${
+                            isCurrent 
+                              ? "border-emerald-500 bg-emerald-500/5 col-span-1" 
+                              : isCompleted 
+                                ? "border-zinc-800 bg-zinc-900/40 opacity-75"
+                                : "border-zinc-900 bg-zinc-950 opacity-40"
+                          }`}
+                        >
+                          <span className="text-2xl mt-0.5 shrink-0" role="img" aria-label="badge font-serif">{lvl.badge}</span>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-baseline">
+                              <h5 className="text-xs font-black text-white uppercase tracking-tight">Lvl {lvl.level}: {lvl.name}</h5>
+                              <span className="text-[9px] font-mono text-zinc-500 font-bold">{lvl.minXp} XP</span>
+                            </div>
+                            
+                            <div className="mt-1.5 space-y-1">
+                              <p className="text-[10px] font-mono text-emerald-400/90 tracking-tight font-bold">Unlocks:</p>
+                              <ul className="list-disc pl-4 text-[9px] text-zinc-400 space-y-0.5">
+                                {lvl.unlocks.map((un, uid) => (
+                                  <li key={uid}>{un}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Achievements block */}
+                  <div className="space-y-2 pt-2">
+                    <h4 className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider font-extrabold mb-1">LOGROS DE TRANSMISIÓN</h4>
+                    <div className="grid grid-cols-1 gap-2">
+                      {ACHIEVEMENTS.map((ach) => {
+                        const isEarned = currentUserProgress.achievements?.includes(ach.id);
+                        return (
+                          <div 
+                            key={ach.id}
+                            className={`p-2.5 border rounded-md flex items-center justify-between gap-3 text-xs ${
+                              isEarned 
+                                ? "bg-zinc-900/60 border-zinc-800" 
+                                : "bg-zinc-950/20 border-zinc-900/40 opacity-30 select-none animate-pulse-slow"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-xl shrink-0">{ach.icon}</span>
+                              <div>
+                                <p className="font-bold text-zinc-200 uppercase tracking-tight text-[11px]">{ach.name}</p>
+                                <p className="text-[9px] font-mono text-zinc-500 leading-none mt-0.5">{ach.desc}</p>
+                              </div>
+                            </div>
+                            <span className={`text-[9px] font-mono font-bold ${isEarned ? "text-emerald-400" : "text-zinc-600"}`}>
+                              {isEarned ? `+${ach.xpValue} XP` : "🔒"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-zinc-900 shrink-0">
+                  <button
+                    onClick={() => setIsProgressModalOpen(false)}
+                    className="w-full py-2 bg-white hover:bg-emerald-400 text-black text-xs font-black uppercase tracking-wider transition rounded cursor-pointer"
+                  >
+                    Confirmar Metadatos de Red
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
         

@@ -32,6 +32,7 @@ interface MatchTabProps {
   onSetUserProfile: (name: string, avatar: string, tastes: string[]) => void;
   onSetActiveRoom: (room: MatchRoom | null) => void;
   onRefreshState: () => void;
+  currentUserProgress?: { xp: number; level: number; achievements: string[] };
 }
 
 export default function MatchTab({
@@ -43,7 +44,8 @@ export default function MatchTab({
   activeRoom,
   onSetUserProfile,
   onSetActiveRoom,
-  onRefreshState
+  onRefreshState,
+  currentUserProgress
 }: MatchTabProps) {
   // Setup Lobby forms states
   const [inputName, setInputName] = useState<string>("Sombra Anónima");
@@ -306,7 +308,8 @@ export default function MatchTab({
         body: JSON.stringify({
           roomId: activeRoom.id,
           sender: userName || "Tú",
-          content: chatMessage.trim()
+          content: chatMessage.trim(),
+          userId: currentUserId
         })
       });
       if (response.ok) {
@@ -334,7 +337,8 @@ export default function MatchTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roomId: activeRoom.id,
-          interests: activeRoom.interests
+          interests: activeRoom.interests,
+          userId: currentUserId
         })
       });
       if (response.ok) {
@@ -670,14 +674,24 @@ export default function MatchTab({
         
         {/* Ask AI for Deep Icebreaker Prompt using server-side Gemini SDK */}
         <button
-          onClick={handleGetAIIcebreaker}
+          onClick={() => {
+            if (currentUserProgress && currentUserProgress.level < 2) {
+              alert("🔒 Acceso Restringido. Invocar al oráculo de IA Gemini requiere rango Nivel 2 (Criptógrafo). ¡Chatea para conseguir más puntos de experiencia XP!");
+            } else {
+              handleGetAIIcebreaker();
+            }
+          }}
           disabled={isGeneratingIcebreaker}
-          className="flex-1 h-10 border border-zinc-800 hover:border-emerald-400 rounded-lg text-zinc-400 hover:text-emerald-400 text-[10px] font-mono uppercase tracking-tight flex items-center justify-center gap-1.5 transition disabled:opacity-40 active:scale-95"
+          className={`flex-1 h-10 border text-[10px] font-mono uppercase tracking-tight flex items-center justify-center gap-1.5 transition disabled:opacity-40 active:scale-95 rounded-lg ${
+            currentUserProgress && currentUserProgress.level < 2
+              ? "border-zinc-900 bg-zinc-900/40 text-zinc-650 cursor-not-allowed hover:text-zinc-500"
+              : "border-zinc-800 hover:border-emerald-400 text-zinc-400 hover:text-emerald-400 cursor-pointer"
+          }`}
           id="btn-ai-icebreaker-trigger"
           title="Generar pregunta profunda con Inteligencia Artificial"
         >
           <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-          <span>{isGeneratingIcebreaker ? "GENERANDO..." : "AI ROMPEHIELOS"}</span>
+          <span>{isGeneratingIcebreaker ? "GENERANDO..." : (currentUserProgress && currentUserProgress.level < 2 ? "🔒 AI ROMPEHIELOS" : "AI ROMPEHIELOS")}</span>
         </button>
 
         {/* Level 2: Toggle Audio Call */}

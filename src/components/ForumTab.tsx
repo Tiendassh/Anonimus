@@ -20,6 +20,7 @@ interface ForumTabProps {
   currentUserId: string;
   userName: string;
   onRefreshState: () => void;
+  currentUserProgress?: { xp: number; level: number; achievements: string[] };
 }
 
 export default function ForumTab({
@@ -27,7 +28,8 @@ export default function ForumTab({
   posts,
   currentUserId,
   userName,
-  onRefreshState
+  onRefreshState,
+  currentUserProgress
 }: ForumTabProps) {
   const [selectedTopicId, setSelectedTopicId] = useState<string>("3"); // default to Privacidad - Huida Digital Completa
   const [activePostId, setActivePostId] = useState<string | null>(null);
@@ -46,6 +48,9 @@ export default function ForumTab({
 
   // Comment state
   const [newCommentContent, setNewCommentContent] = useState<string>("");
+
+  // Action Error state to hold 403 locks
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     // If selected topic becomes missing due to deletion, point to first available
@@ -68,7 +73,8 @@ export default function ForumTab({
           id: editingTopicId,
           name: topicName.trim(),
           description: topicDesc.trim(),
-          category: topicCat.trim() || "General"
+          category: topicCat.trim() || "General",
+          userId: currentUserId
         })
       });
       if (response.ok) {
@@ -77,7 +83,12 @@ export default function ForumTab({
         setTopicName("");
         setTopicDesc("");
         setTopicCat("");
+        setActionError(null);
         onRefreshState();
+      } else {
+        const errData = await response.json();
+        setActionError(errData.error || "Error al guardar el tema.");
+        setIsEditingTopic(false);
       }
     } catch (err) {
       console.error("Error saving topic", err);
@@ -85,6 +96,10 @@ export default function ForumTab({
   };
 
   const handleStartEditTopic = (topic: Topic) => {
+    if (currentUserProgress?.level && currentUserProgress.level < 4) {
+      setActionError("🔒 Rango Insuficiente. Editar categorías de discusión globales requiere ser Nivel 4: Espectro de Red.");
+      return;
+    }
     setEditingTopicId(topic.id);
     setTopicName(topic.name);
     setTopicDesc(topic.description);
@@ -93,6 +108,10 @@ export default function ForumTab({
   };
 
   const handleStartCreateTopic = () => {
+    if (currentUserProgress?.level && currentUserProgress.level < 4) {
+      setActionError("🔒 Rango Insuficiente. Crear categorías globales (temas) requiere ser Nivel 4 (Espectro de Red). ¡Participa en la comunidad para ganar XP!");
+      return;
+    }
     setEditingTopicId(null);
     setTopicName("");
     setTopicDesc("");
@@ -101,6 +120,10 @@ export default function ForumTab({
   };
 
   const handleDeleteTopic = async (id: string, name: string) => {
+    if (currentUserProgress?.level && currentUserProgress.level < 4) {
+      setActionError("🔒 Rango Insuficiente. Eliminar categorías globales (temas) requiere ser Nivel 4 (Espectro de Red).");
+      return;
+    }
     if (!confirm(`¿Está seguro de eliminar el tema "${name}"? Se borrarán sus foros y comentarios.`)) {
       return;
     }
@@ -108,10 +131,14 @@ export default function ForumTab({
       const response = await fetch("/api/topics", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", id })
+        body: JSON.stringify({ action: "delete", id, userId: currentUserId })
       });
       if (response.ok) {
+        setActionError(null);
         onRefreshState();
+      } else {
+        const errData = await response.json();
+        setActionError(errData.error || "Error al eliminar el tema.");
       }
     } catch (err) {
       console.error("Error deleting topic", err);
@@ -131,14 +158,20 @@ export default function ForumTab({
           topicId: selectedTopicId,
           title: newPostTitle.trim(),
           content: newPostContent.trim(),
-          author: userName || "Anónimo"
+          author: userName || "Anónimo",
+          userId: currentUserId
         })
       });
       if (response.ok) {
         setNewPostTitle("");
         setNewPostContent("");
         setIsCreatingPost(false);
+        setActionError(null);
         onRefreshState();
+      } else {
+        const errData = await response.json();
+        setActionError(errData.error || "Error al crear la transmisión.");
+        setIsCreatingPost(false);
       }
     } catch (err) {
       console.error("Error creating post", err);
@@ -150,10 +183,14 @@ export default function ForumTab({
       const response = await fetch(`/api/forum/posts/${postId}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "like" })
+        body: JSON.stringify({ action: "like", userId: currentUserId })
       });
       if (response.ok) {
+        setActionError(null);
         onRefreshState();
+      } else {
+        const errData = await response.json();
+        setActionError(errData.error || "Error al dar like.");
       }
     } catch (err) {
       console.error("Error liking post", err);
@@ -171,12 +208,17 @@ export default function ForumTab({
         body: JSON.stringify({
           action: "comment",
           author: userName || "Anónimo",
-          commentContent: newCommentContent.trim()
+          commentContent: newCommentContent.trim(),
+          userId: currentUserId
         })
       });
       if (response.ok) {
         setNewCommentContent("");
+        setActionError(null);
         onRefreshState();
+      } else {
+        const errData = await response.json();
+        setActionError(errData.error || "Error al añadir comentario.");
       }
     } catch (err) {
       console.error("Error adding comment", err);
@@ -193,6 +235,18 @@ export default function ForumTab({
         <span>ENLACE LOCK: crypt.sh/forum-v19</span>
         <span className="text-emerald-400 font-bold bg-emerald-400/10 px-1 py-0.5 rounded">FOROS ENCRIPTADOS</span>
       </div>
+
+      {actionError && (
+        <div className="bg-red-950/80 border-b border-red-500 text-red-200 p-3 text-xs flex justify-between items-center shrink-0 font-mono">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 animate-bounce" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-white ml-2 text-[10px] font-bold tracking-tighter uppercase whitespace-nowrap">
+            [CERRAR]
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Left Topics Side Panel in Bold Typography Theme style */}
@@ -311,11 +365,21 @@ export default function ForumTab({
 
               {!isCreatingPost && (
                 <button
-                  onClick={() => setIsCreatingPost(true)}
-                  className="bg-white text-black text-xs font-black px-4 py-2 hover:bg-emerald-400 transition-colors uppercase tracking-tight shrink-0 flex items-center gap-1 active:scale-95"
+                  onClick={() => {
+                    if (currentUserProgress && currentUserProgress.level < 3) {
+                      setActionError("🔒 Acceso Restringido. Publicar en los foros de discusión requiere ser Nivel 3 (Sombra Digital) para garantizar inmunidad en la red.");
+                    } else {
+                      setIsCreatingPost(true);
+                    }
+                  }}
+                  className={`text-xs font-black px-4 py-2 hover:bg-emerald-400 transition-colors uppercase tracking-tight shrink-0 flex items-center gap-1 active:scale-95 ${
+                    currentUserProgress && currentUserProgress.level < 3
+                      ? "bg-zinc-900 text-zinc-500 border border-zinc-800 cursor-not-allowed"
+                      : "bg-white text-black cursor-pointer"
+                  }`}
                   id="btn-trigger-create-post"
                 >
-                  <Plus className="w-4 h-4" /> Nuevo Post
+                  {currentUserProgress && currentUserProgress.level < 3 ? "🔒 Bloqueado (Nvl 3)" : <><Plus className="w-4 h-4" /> Nuevo Post</>}
                 </button>
               )}
             </div>
@@ -453,24 +517,31 @@ export default function ForumTab({
                       </div>
 
                       {/* Reply Entry box */}
-                      <form onSubmit={(e) => handleAddComment(post.id, e)} className="flex gap-2 pt-2 border-t border-zinc-900">
-                        <input
-                          type="text"
-                          required
-                          placeholder="TRANSMITIR COMENTARIO ANÓNIMO..."
-                          value={newCommentContent}
-                          onChange={(e) => setNewCommentContent(e.target.value)}
-                          className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-xs font-mono uppercase focus:outline-none focus:border-white text-zinc-200 placeholder:text-zinc-700"
-                          id={`input-comment-${post.id}`}
-                        />
-                        <button
-                          type="submit"
-                          className="bg-white text-black text-xs font-black px-4 hover:bg-emerald-400 transition"
-                          id={`btn-submit-comment-${post.id}`}
-                        >
-                          ENVIAR
-                        </button>
-                      </form>
+                      {currentUserProgress && currentUserProgress.level < 2 ? (
+                        <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-[10px] font-mono text-zinc-500 shrink-0">
+                          <span>🔒 Enviar comentarios requiere Rango Nivel 2 (Criptógrafo). Tienes {currentUserProgress.xp} XP.</span>
+                          <span className="text-emerald-400">Participa en Match para subir</span>
+                        </div>
+                      ) : (
+                        <form onSubmit={(e) => handleAddComment(post.id, e)} className="flex gap-2 pt-2 border-t border-zinc-900">
+                          <input
+                            type="text"
+                            required
+                            placeholder="TRANSMITIR COMENTARIO ANÓNIMO..."
+                            value={newCommentContent}
+                            onChange={(e) => setNewCommentContent(e.target.value)}
+                            className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-xs font-mono uppercase focus:outline-none focus:border-white text-zinc-200 placeholder:text-zinc-700"
+                            id={`input-comment-${post.id}`}
+                          />
+                          <button
+                            type="submit"
+                            className="bg-white text-black text-xs font-black px-4 hover:bg-emerald-400 transition"
+                            id={`btn-submit-comment-${post.id}`}
+                          >
+                            ENVIAR
+                          </button>
+                        </form>
+                      )}
                     </div>
                   )}
                 </div>

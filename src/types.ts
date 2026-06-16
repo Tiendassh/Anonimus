@@ -50,6 +50,7 @@ export interface AppState {
   topics: Topic[];
   posts: ForumPost[];
   rooms: MatchRoom[];
+  userProgress?: Record<string, { xp: number; level: number; achievements: string[] }>;
 }
 
 export interface UserProfile {
