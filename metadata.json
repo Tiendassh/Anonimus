@@ -1,0 +1,11 @@
+{
+  "name": "Remix: Anonymous Match \u0026 Chat System",
+  "description": "An anonymous full-screen match and chat system with audio, camera, discussion forum, editable topics, host/proxy obscuring, and proximity-unlocking levels of communication based on common interests.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
